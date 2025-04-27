@@ -1,0 +1,115 @@
+# Full-Fledged Code for "Explainable AI for Financial Fraud Detection"
+
+# Install necessary libraries (uncomment if not installed)
+# !pip install pandas numpy scikit-learn xgboost lightgbm imbalanced-learn shap lime matplotlib
+
+# Import libraries
+import pandas as pd
+import numpy as np
+import shap
+import lime
+import lime.lime_tabular
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from imblearn.over_sampling import SMOTE
+
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.ensemble import VotingClassifier
+
+# Load Dataset
+df = pd.read_csv('creditcard.csv')  # Replace with your dataset path
+print("Original Data Shape:", df.shape)
+
+# Feature and Label Separation
+X = df.drop('Class', axis=1)
+y = df['Class']
+
+# PCA Transformation
+pca = PCA(n_components=20)
+X_pca = pca.fit_transform(X)
+
+# Feature Scaling
+scaler = MinMaxScaler()
+X_scaled = scaler.fit_transform(X_pca)
+
+# Train-Test Split
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, stratify=y, random_state=42)
+
+# Handling Class Imbalance with SMOTE
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+print("Resampled Train Data Shape:", X_train_resampled.shape)
+
+# Model Initialization
+xgb_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+lgbm_model = lgb.LGBMClassifier()
+rf_model = RandomForestClassifier()
+
+# Ensemble Model
+ensemble_model = VotingClassifier(estimators=[
+    ('xgb', xgb_model),
+    ('lgbm', lgbm_model)
+], voting='soft')
+
+# Train Models
+xgb_model.fit(X_train_resampled, y_train_resampled)
+lgbm_model.fit(X_train_resampled, y_train_resampled)
+rf_model.fit(X_train_resampled, y_train_resampled)
+ensemble_model.fit(X_train_resampled, y_train_resampled)
+
+# Predict and Evaluate Models
+def evaluate_model(model, X_test, y_test):
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    prec = precision_score(y_test, y_pred)
+    rec = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    return acc, prec, rec, f1
+
+models = {'XGBoost': xgb_model, 'LightGBM': lgbm_model, 'RandomForest': rf_model, 'Ensemble': ensemble_model}
+
+for name, model in models.items():
+    acc, prec, rec, f1 = evaluate_model(model, X_test, y_test)
+    print(f"\n{name} Performance:")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall: {rec:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+
+# Explainability with SHAP
+print("\nGenerating SHAP Summary Plot for Ensemble Model...")
+explainer = shap.TreeExplainer(ensemble_model)
+shap_values = explainer.shap_values(X_test)
+
+shap.summary_plot(shap_values, X_test, plot_type="bar")
+
+# Explainability with LIME
+print("\nExplaining One Prediction Using LIME...")
+feature_names = [f'PC{i+1}' for i in range(X_pca.shape[1])]
+
+lime_explainer = lime.lime_tabular.LimeTabularExplainer(X_train_resampled, feature_names=feature_names, class_names=['Non-Fraud', 'Fraud'], discretize_continuous=True)
+
+idx = 1  # index of the test sample to explain
+exp = lime_explainer.explain_instance(X_test[idx], ensemble_model.predict_proba, num_features=10)
+exp.show_in_notebook(show_table=True)
+
+# Predict New Transactions
+def predict_transaction(model, transaction):
+    transaction_pca = pca.transform([transaction])
+    transaction_scaled = scaler.transform(transaction_pca)
+    prediction = model.predict(transaction_scaled)
+    prediction_prob = model.predict_proba(transaction_scaled)
+    return prediction[0], prediction_prob
+
+# Example Prediction
+# transaction = np.array([...])  # New transaction features
+# predict_transaction(ensemble_model, transaction)
+
+print("\nPipeline Complete!")
+
